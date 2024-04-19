@@ -26,9 +26,8 @@ public class TransformClassDataHandler implements InvocationHandler {
         return switch (methodName) {
             case "isByteBufferSupported" -> {
                 ClassLoader classLoader = originConsumer instanceof ClassLoader loader ? loader : unwrapConsumer(originConsumer);
-                String string = args[0].toString();
-                if (string.startsWith("com.sun.jna")) System.out.println(string);
-                yield !transformer.isApplicable(args[0].toString(), classLoader, null);
+                String name = args[0].toString();
+                yield !transformer.isApplicable(name, classLoader, null);
             }
             case "consumeClassData" -> {
                 if (ByteBuffer.class.isAssignableFrom(method.getParameterTypes()[1])) {
