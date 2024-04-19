@@ -1,9 +1,13 @@
 package com.ixnah.app.las.util;
 
-import com.intellij.util.lang.ClassPath;
+import com.intellij.ide.BytecodeTransformer;
 import com.intellij.util.lang.UrlClassLoader;
+import com.ixnah.app.las.transform.TransformClassDataHandler;
+import com.ixnah.app.las.transform.TransformSupport;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 
 public class ClassLoaderUtil {
 
@@ -53,5 +57,20 @@ public class ClassLoaderUtil {
             UnsafeUtil.putObject(classLoader, UrlClassLoader_classPath_offset, ((UrlClassLoader) classPathFrom).getClassPath());
         }
         return classLoader;
+    }
+
+    public static void injectTransformPipe(ClassLoader classLoader) throws NoSuchFieldException {
+        ClassLoader appClassLoader = getAppClassLoader();
+        Field consumerField = UrlClassLoader.class.getDeclaredField("classDataConsumer");
+        long consumerFieldOffset = UnsafeUtil.objectFieldOffset(consumerField);
+        Class<?> dataConsumerClass = consumerField.getType();
+        Object originConsumer = UnsafeUtil.getObject(classLoader, consumerFieldOffset);
+        if (Proxy.isProxyClass(originConsumer.getClass())) return;
+        InvocationHandler pipeHandler = TransformSupport.getTransformPipeHandler();
+        Object transformer = Proxy.newProxyInstance(appClassLoader, new Class[]{BytecodeTransformer.class}, pipeHandler);
+        TransformClassDataHandler handler = new TransformClassDataHandler(originConsumer, (BytecodeTransformer) transformer);
+        ClassLoader dataConsumerClassLoader = dataConsumerClass.getClassLoader();
+        Object proxyConsumer = Proxy.newProxyInstance(dataConsumerClassLoader, new Class[]{dataConsumerClass}, handler);
+        UnsafeUtil.putObject(classLoader, consumerFieldOffset, proxyConsumer);
     }
 }

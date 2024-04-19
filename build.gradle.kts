@@ -17,6 +17,7 @@ dependencies {
     compileOnly("org.ow2.asm:asm-tree:9.6")
     compileOnly("org.eclipse.lsp4j:org.eclipse.lsp4j:0.21.2")
     compileOnly("net.java.dev.jna:jna:5.14.0")
+    compileOnly("org.jetbrains.pty4j:pty4j:0.12.26")
     implementation("net.fornwall:jelf:0.9.0")
 }
 

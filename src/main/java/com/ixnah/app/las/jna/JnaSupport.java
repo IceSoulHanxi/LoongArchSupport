@@ -1,19 +1,20 @@
 package com.ixnah.app.las.jna;
 
+import com.intellij.ide.plugins.IdeaPluginDescriptorImpl;
+import com.intellij.ide.plugins.PluginManagerCore;
+import com.intellij.ide.plugins.cl.PluginClassLoader;
 import com.intellij.util.lang.UrlClassLoader;
-import com.ixnah.app.las.jna.proxy.InternalJvm;
-import com.ixnah.app.las.jna.proxy.NativeLibrary;
-import com.ixnah.app.las.jna.proxy.Pointer;
-import com.ixnah.app.las.jna.proxy.handler.LocalSymbolHandler;
+import com.ixnah.app.las.classloader.CustomClassLoader;
+import com.ixnah.app.las.classloader.ResolveScopeHandler;
 import com.ixnah.app.las.transform.TransformSupport;
 import com.ixnah.app.las.util.ClassLoaderUtil;
 import com.ixnah.app.las.util.LogUtil;
 import com.ixnah.app.las.util.ResourceUtil;
-import com.ixnah.app.las.util.ThrowUtil;
+import com.ixnah.app.las.util.UnsafeUtil;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
 import java.nio.file.Path;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 public class JnaSupport {
 
@@ -33,63 +34,50 @@ public class JnaSupport {
             TransformSupport.getTransformPipeHandler().add(new JnaTransformer());
             // 建立一个使用全局ClassPath且隔离的ClassLoader用于加载已当指令集的JniDispatch
             ClassLoader appClassLoader = ClassLoaderUtil.getAppClassLoader();
-            ClassLoader isolated = ClassLoaderUtil.copyUrlClassPath(UrlClassLoader.build().get(), appClassLoader);
-            TransformSupport.injectUrlClassLoader(isolated);
-            ClassLoaderUtil.byContext(isolated, JnaSupport::removeLoadedNative);
+            CustomClassLoader loader = new CustomClassLoader(UrlClassLoader.build());
+            ClassLoaderUtil.copyUrlClassPath(loader, appClassLoader);
+            ClassLoaderUtil.injectTransformPipe(loader);
+            injectJar(loader);
         }
         LogUtil.d("loadJna end");
     }
 
-    private static void removeLoadedNative() {
-        // TODO: 从jvm中移除已加载的类 com.sun.jna.Native
-        NativeLibrary library = NativeLibrary.getInstance("jvm");
-        InternalJvm jvm = LocalSymbolHandler.create(library, InternalJvm.class);
-        jvm.cleanInitErrorTable();
-        Class<?> classNative = ThrowUtil.runThrowing(() -> Class.forName("com.sun.jna.Native", false, JnaSupport.class.getClassLoader()));
-        ClassLoader classLoader = classNative.getClassLoader();
-//        LogUtil.d(Arrays.toString(classLoader.getClass().getDeclaredFields()));
-//        LogUtil.d(Arrays.toString(ClassLoader.class.getDeclaredFields()));
-//            Field classesField = ThrowUtil.runThrowing(() -> ClassLoader.class.getDeclaredField("classes"));
-//            long classesOffset = UnsafeUtil.objectFieldOffset(classesField);
-//            List<Class<?>> classes = UnsafeUtil.getObject(classLoader, classesOffset);
-//            synchronized (classes) {
-//                classes.remove(classNative);
-//                System.gc();
-//            }
-        Pointer classLoaderOop = jvm.resolveExternalGuard(classLoader);
-        LogUtil.d("classLoaderOop: " + classLoaderOop);
-        Pointer nonReflectClassLoaderOop = jvm.nonReflectionClassLoader(classLoaderOop);
-        LogUtil.d("nonReflectClassLoaderOop: " + nonReflectClassLoaderOop);
-        Pointer loaderData = jvm.loaderDataAcquire(nonReflectClassLoaderOop);
-        LogUtil.d("loaderData: " + loaderData);
-        Map<String, Long> offsetMap = VmStructs.getEntryStream(library).filter(entry -> {
-            String name = entry.getName();
-            String declaringType = entry.getDeclaringType();
-            return ("_dictionary".equals(name) && "ClassLoaderData".equals(declaringType))
-                    || ("_name".equals(name) && "Klass".equals(declaringType));
-        }).limit(2).collect(Collectors.toMap(VmStructs.VmStructEntry::getName, VmStructs.VmStructEntry::getOffset));
-        LogUtil.d("offsetMap: " + offsetMap);
-        Pointer dictionary = loaderData.getPointer(offsetMap.get("_dictionary"));
-        LogUtil.d("dictionary: " + dictionary);
-        Pointer classNativeOop = jvm.resolveExternalGuard(classNative);
-        LogUtil.d("classNativeOop: " + classNativeOop);
-        Pointer klassNative = jvm.loadKlassRaw(classNativeOop);
-        LogUtil.d("klassNative: " + klassNative);
-        Pointer symbolNative = klassNative.getPointer(offsetMap.get("_name"));
-        LogUtil.d("symbolNative: " + symbolNative);
-        int index = jvm.classHashtableIndexFor(dictionary, symbolNative);
-        LogUtil.d("index: " + index);
-        int hash = jvm.classHashtableComputeHash(dictionary, symbolNative);
-        LogUtil.d("hash: " + hash);
-        Pointer entry = jvm.getDictionaryEntry(dictionary, index, hash, symbolNative);
-        LogUtil.d("entry: " + entry);
-        jvm.freeDictionaryEntry(dictionary, entry);
-//        LogUtil.d("entry: " + jvm.getDictionaryEntry(dictionary, index, hash, symbolNative));
-//        jvm.unloadClass(klassNative);
+    private static void injectJar(UrlClassLoader loader) throws NoSuchFieldException, InstantiationException {
+        ClassLoaderUtil.injectTransformPipe(loader);
+        IdeaPluginDescriptorImpl injectDescriptor = UnsafeUtil.allocateInstance(IdeaPluginDescriptorImpl.class);
+        injectDescriptor.setPluginClassLoader(loader);
+        Class<?> classLoaderClass = PluginClassLoader.class;
+        Field _resolveScopeManagerField;
         try {
-            Class.forName("com.sun.jna.Native");
-        } catch (ClassNotFoundException e) {
-            LogUtil.e(e);
+            _resolveScopeManagerField = classLoaderClass.getDeclaredField("resolveScopeManager");
+        } catch (NoSuchFieldException e) {
+            _resolveScopeManagerField = classLoaderClass.getDeclaredField("_resolveScopeManager");
         }
+        long resolveScopeManagerOffset = UnsafeUtil.objectFieldOffset(_resolveScopeManagerField);
+        Field parentsField = classLoaderClass.getDeclaredField("parents");
+        long parentsOffset = UnsafeUtil.objectFieldOffset(parentsField);
+        Field resolveScopeManagerField = _resolveScopeManagerField;
+        PluginManagerCore.getLoadedPlugins().forEach(pd -> {
+            if (!(pd.getPluginClassLoader() instanceof PluginClassLoader pluginClassLoader)) return;
+            if (JnaSupport.class.getClassLoader().equals(pluginClassLoader)) return;
+
+            Object oldManager = UnsafeUtil.getObject(pluginClassLoader, resolveScopeManagerOffset);
+            ResolveScopeHandler managerHandler = new ResolveScopeHandler(oldManager);
+            Object newManager = Proxy.newProxyInstance(classLoaderClass.getClassLoader(),
+                    new Class[]{resolveScopeManagerField.getType()}, managerHandler);
+            UnsafeUtil.putObject(pluginClassLoader, resolveScopeManagerOffset, newManager);
+
+            IdeaPluginDescriptorImpl[] parents = UnsafeUtil.getObject(pluginClassLoader, parentsOffset);
+            IdeaPluginDescriptorImpl[] newParents = new IdeaPluginDescriptorImpl[parents.length + 1];
+            newParents[0] = injectDescriptor;
+            if (parents.length > 0) {
+                System.arraycopy(parents, 0, newParents, 1, parents.length);
+            }
+            UnsafeUtil.putObject(pluginClassLoader, parentsOffset, newParents);
+            pluginClassLoader.clearParentListCache();
+            LogUtil.d("inject jar to plugin " + pd.getPluginId());
+        });
     }
+
+
 }

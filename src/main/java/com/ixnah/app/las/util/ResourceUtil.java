@@ -38,4 +38,16 @@ public class ResourceUtil {
             LogUtil.e(e);
         }
     }
+
+    public static Path extractFile(Path extractFilePath, String dataFilePath, String md5) {
+        if (!Files.isRegularFile(extractFilePath) || !HashUtil.md5Equals(extractFilePath, md5)) {
+            try (InputStream stream = ResourceUtil.class.getResourceAsStream(dataFilePath)) {
+                Files.createDirectories(extractFilePath.getParent());
+                Files.copy(Objects.requireNonNull(stream, "Can't found " + dataFilePath + " form classpath"), extractFilePath, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                LogUtil.e(e);
+            }
+        }
+        return extractFilePath;
+    }
 }

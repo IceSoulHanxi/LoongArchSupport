@@ -59,4 +59,9 @@ public class UnsafeUtil {
     public static int addressSize() {
         return unsafe.addressSize();
     }
+
+    @SuppressWarnings("unchecked")
+    public static <T> T allocateInstance(Class<? extends T> cls) throws InstantiationException {
+        return (T) unsafe.allocateInstance(cls);
+    }
 }

@@ -75,19 +75,4 @@ public class TransformSupport {
             LogUtil.d("inject transformer to plugin " + descriptor.getPluginId());
         });
     }
-
-    public static void injectUrlClassLoader(ClassLoader classLoader) throws NoSuchFieldException {
-        ClassLoader appClassLoader = ClassLoaderUtil.getAppClassLoader();
-        Field consumerField = UrlClassLoader.class.getDeclaredField("classDataConsumer");
-        Object transformer = Proxy.newProxyInstance(appClassLoader, new Class[]{BytecodeTransformer.class}, PIPELINE_HANDLER);
-        long consumerFieldOffset = UnsafeUtil.objectFieldOffset(consumerField);
-        Class<?> dataConsumerClass = consumerField.getType();
-        Object originConsumer = UnsafeUtil.getObject(classLoader, consumerFieldOffset);
-        if (Proxy.isProxyClass(originConsumer.getClass())) return;
-        BytecodeTransformer bytecodeTransformer = (BytecodeTransformer) transformer;
-        TransformClassDataHandler handler = new TransformClassDataHandler(originConsumer, bytecodeTransformer);
-        ClassLoader dataConsumerClassLoader = dataConsumerClass.getClassLoader();
-        Object proxyConsumer = Proxy.newProxyInstance(dataConsumerClassLoader, new Class[]{dataConsumerClass}, handler);
-        UnsafeUtil.putObject(classLoader, consumerFieldOffset, proxyConsumer);
-    }
 }
