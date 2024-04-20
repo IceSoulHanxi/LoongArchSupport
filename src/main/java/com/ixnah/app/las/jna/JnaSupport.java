@@ -44,8 +44,6 @@ public class JnaSupport {
 
     private static void injectJar(UrlClassLoader loader) throws NoSuchFieldException, InstantiationException {
         ClassLoaderUtil.injectTransformPipe(loader);
-        IdeaPluginDescriptorImpl injectDescriptor = UnsafeUtil.allocateInstance(IdeaPluginDescriptorImpl.class);
-        injectDescriptor.setPluginClassLoader(loader);
         Class<?> classLoaderClass = PluginClassLoader.class;
         Field _resolveScopeManagerField;
         try {
@@ -57,16 +55,20 @@ public class JnaSupport {
         Field parentsField = classLoaderClass.getDeclaredField("parents");
         long parentsOffset = UnsafeUtil.objectFieldOffset(parentsField);
         Field resolveScopeManagerField = _resolveScopeManagerField;
+        IdeaPluginDescriptorImpl injectDescriptor = UnsafeUtil.allocateInstance(IdeaPluginDescriptorImpl.class);
+        injectDescriptor.setPluginClassLoader(loader);
         PluginManagerCore.getLoadedPlugins().forEach(pd -> {
             if (!(pd.getPluginClassLoader() instanceof PluginClassLoader pluginClassLoader)) return;
             if (JnaSupport.class.getClassLoader().equals(pluginClassLoader)) return;
 
+            // 通过resolveScopeManager来判断是否从当前loader加载 如果从当前loader加载则会直接查找父loader 注入绕过当前loader
             Object oldManager = UnsafeUtil.getObject(pluginClassLoader, resolveScopeManagerOffset);
             ResolveScopeHandler managerHandler = new ResolveScopeHandler(oldManager);
             Object newManager = Proxy.newProxyInstance(classLoaderClass.getClassLoader(),
                     new Class[]{resolveScopeManagerField.getType()}, managerHandler);
             UnsafeUtil.putObject(pluginClassLoader, resolveScopeManagerOffset, newManager);
 
+            // 将隔离loader注入到插件依赖中
             IdeaPluginDescriptorImpl[] parents = UnsafeUtil.getObject(pluginClassLoader, parentsOffset);
             IdeaPluginDescriptorImpl[] newParents = new IdeaPluginDescriptorImpl[parents.length + 1];
             newParents[0] = injectDescriptor;
@@ -74,6 +76,7 @@ public class JnaSupport {
                 System.arraycopy(parents, 0, newParents, 1, parents.length);
             }
             UnsafeUtil.putObject(pluginClassLoader, parentsOffset, newParents);
+
             pluginClassLoader.clearParentListCache();
             LogUtil.d("inject jar to plugin " + pd.getPluginId());
         });

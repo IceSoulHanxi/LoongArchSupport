@@ -5,8 +5,11 @@ import com.intellij.util.lang.UrlClassLoader;
 import com.ixnah.app.las.transform.TransformClassDataHandler;
 import com.ixnah.app.las.transform.TransformSupport;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
 public class ClassLoaderUtil {
@@ -15,17 +18,47 @@ public class ClassLoaderUtil {
         throw new UnsupportedOperationException();
     }
 
-    private static ClassLoader appClassLoader;
+    private static volatile ClassLoader appClassLoader;
 
-    public synchronized static ClassLoader getAppClassLoader() {
+    public static ClassLoader getAppClassLoader() {
         if (appClassLoader == null) {
-            try {
-                appClassLoader = Class.forName("com.intellij.ide.BytecodeTransformer").getClassLoader();
-            } catch (ClassNotFoundException e) {
-                throw new RuntimeException(e);
+            synchronized (ClassLoaderUtil.class) {
+                if (appClassLoader == null) {
+                    try {
+                        appClassLoader = Class.forName("com.intellij.ide.BytecodeTransformer").getClassLoader();
+                    } catch (ClassNotFoundException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
             }
         }
         return appClassLoader;
+    }
+
+    private static final MethodHandle loadClassHandle = ThrowUtil.runPrintingOrNull(() -> {
+        Method method = ClassLoader.class.getDeclaredMethod("loadClass", String.class, boolean.class);
+        return MethodHandles.privateLookupIn(ClassLoader.class, MethodHandles.lookup()).unreflect(method);
+    });
+
+    public static Class<?> loadClass(ClassLoader classLoader, String name, boolean resolve) throws ClassNotFoundException {
+        try {
+            return (Class<?>) loadClassHandle.invokeExact(classLoader, name, resolve);
+        } catch (Throwable e) {
+            throw e instanceof ClassNotFoundException e1 ? e1 : new ClassNotFoundException(name, e);
+        }
+    }
+
+    private static final MethodHandle findClassHandle = ThrowUtil.runPrintingOrNull(() -> {
+        Method method = UrlClassLoader.class.getDeclaredMethod("findClass", String.class);
+        return MethodHandles.privateLookupIn(UrlClassLoader.class, MethodHandles.lookup()).unreflect(method);
+    });
+
+    public static Class<?> findClass(ClassLoader classLoader, String name) throws ClassNotFoundException {
+        try {
+            return (Class<?>) findClassHandle.invokeExact(classLoader, name);
+        } catch (Throwable e) {
+            throw e instanceof ClassNotFoundException e1 ? e1 : new ClassNotFoundException(name, e);
+        }
     }
 
     public static void byContext(ClassLoader classLoader, Runnable runnable) {
